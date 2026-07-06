@@ -34,9 +34,9 @@ cc -std=c99 -o test_roundtrip test_roundtrip.c
 ## Stream format
 
 ```
-┌───────────┬─── 8 tokens (variable length) ─┐
-│ flag byte │  token₀   token₁  ...  token₇  │
-└───────────┴────────────────────────────────┘
+┌───────────┬─── 8 tokens (variable length) ───┐
+│ flag byte │  token₀   token₁   ...   token₇  │
+└───────────┴──────────────────────────────────┘
   flag bit n = 1 → token n is a LITERAL (1 byte)
   flag bit n = 0 → token n is a MATCH   (2 or 3 bytes)
 ```
