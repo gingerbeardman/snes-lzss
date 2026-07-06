@@ -74,6 +74,51 @@ Tested on seven SNES BG tilemaps from a real game (2-byte tile-index words, colu
 
 All seven were confirmed byte-perfect through the C decoder by the round-trip test; only `wild_ride` ships in this repo as sample data. The codec was chosen over zlib/deflate and huffmunch after a bake-off on this dataset; the other algorithms achieved similar or worse ratios while requiring more ROM or RAM for the decoder.
 
+## Comparison: PVSnesLib's LZSS (Nintendo LZ10)
+
+PVSnesLib ships an LZSS codec too (`snes/lzss.h`, `gfx2snes -glz`) — it's the Nintendo LZ77
+"type 0x10" format familiar from GBA/NDS. Same 4096-byte window and 3-byte minimum match as
+this codec, but the differences matter on tilemap data:
+
+| | snes-lzss | PVSnesLib (LZ10) |
+|---|---|---|
+| Max match length | **273** (3-byte extension token) | **18** (hard cap, no extension) |
+| Header | none (caller supplies raw length) | 4 bytes (magic + 24-bit size) |
+| Flag bit order | LSB-first | MSB-first |
+| Overlapping matches | yes (period replication) | not representable |
+| Decoder output | WRAM via $2180 port (CPU-readable) | VRAM-only via $2118/$2119 |
+| Decoder RAM | none (window = output itself) | 4096-byte ring buffer in WRAM |
+| Decoder ROM size | ~426 bytes (compiled C) | ~280 bytes (hand ASM) |
+
+Same seven tilemaps through both encoders (LZ10 sizes via a round-trip-verified
+reimplementation of the gfx2snes encoder, which only accepts image input directly):
+
+| Level | Raw | snes-lzss | LZ10 |
+|-------|-----|-----------|------|
+| wild_ride | 13440 | 1167 | 2220 |
+| obstacles | 13440 | 448 | 1729 |
+| mechanisms | 8512 | 211 | 1066 |
+| rolling_hills | 8064 | 919 | 1512 |
+| contraptions | 6720 | 183 | 861 |
+| kitchen_sink | 14336 | 904 | 2128 |
+| deep_descent | 16864 | 331 | 2092 |
+| **TOTAL** | **81376** | **4163 (5.1%)** | **11608 (14.3%)** |
+
+**2.8× smaller overall.** The decisive factor is the extension token: tilemaps are full of
+long uniform runs (sky, empty space, repeating terrain) that blow through LZ10's 18-byte cap
+immediately — one 273-byte match here replaces up to sixteen LZ10 tokens. Every map in the
+set hits the 273 ceiling (wild_ride 146 times).
+
+Honest pros/cons:
+
+- **LZ10 wins on decoder size** (~150 bytes smaller, hand-written assembly) and its
+  VRAM-direct decode is convenient when the data is write-only graphics.
+- **snes-lzss wins on ratio** (2.8× on this data), needs **zero ring-buffer RAM**, and its
+  WRAM output leaves the decoded map CPU-readable — essential when the same tilemap drives
+  collision queries, which is exactly why it was written.
+- Worth knowing: PVSnesLib only applies LZ10 to tile *graphics*; its tilemap loader
+  (`bgInitMapSet`) is always uncompressed. For compressed tilemaps it has no equivalent.
+
 ## Encoder algorithm
 
 Greedy-with-lazy LZSS. Hash chains on 3-byte prefixes with exhaustive search within the 4096-byte window. Lazy evaluation: after finding a match at position `i`, the encoder checks whether a match starting at `i+1` is longer; if so, it emits a literal for `i` and re-tries from `i+1`. This typically recovers 2–5% over pure greedy on structured data.
@@ -128,8 +173,8 @@ map_lz_load(blob, rom_bank, complen, rawlen);
 // g_map_shadow now contains the decoded tilemap; stream it to VRAM via DMA.
 ```
 
-**ROM/CPU footprint (approximate):**  
-The decoder (token loop + primitives) is roughly 200–400 bytes of 65816 code at `-Os` with llvm-mos, depending on how aggressively the linker inlines the static helpers. It runs only at level-load time (no per-frame overhead) and fits comfortably in a dedicated 32 KB ROM bank with room to spare.
+**ROM/CPU footprint (measured):**  
+The decoder is 426 bytes of 65816 code as compiled by llvm-mos with `minsize` (375-byte token loop + 51-byte load wrapper). It runs only at level-load time (no per-frame overhead) and fits comfortably in a dedicated 32 KB ROM bank with room to spare.
 
 ## License
 
