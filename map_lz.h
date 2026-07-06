@@ -185,4 +185,126 @@ static void map_lz_load_host(const uint8_t *blob, uint8_t *out, uint16_t rawlen)
 }
 #endif
 
+/* =========================================================================
+ * VRAM-direct mode (optional) — #define MAP_LZ_ENABLE_VRAM before including.
+ * =========================================================================
+ * For WRITE-ONLY tile graphics, streaming the decoded bytes straight to VRAM
+ * avoids the full-size WRAM shadow of the default mode (which needs RAW_MAX
+ * bytes so the decoded map stays CPU-readable). Instead this mode keeps only a
+ * 4096-byte sliding-window RING buffer in WRAM — the largest back-reference the
+ * format allows (off 1..4096) — and every decoded byte is written to BOTH the
+ * ring (for future back-references) AND the VRAM data port.
+ *
+ * Back-references are plain C array reads from the ring (faster than the default
+ * mode's $2180 port-seek reads). The decode is byte-at-a-time, which makes
+ * overlapping matches (off < len) and ring wraparound correct by construction:
+ * a byte is always read from ring[(o - off) & 4095] AFTER the previous byte was
+ * written, and off <= 4096 guarantees the referenced byte is still in the ring.
+ *
+ * REQUIRED (in addition to the default-mode SNES requirements):
+ *   extern uint8_t g_lz_window[4096];   // WRAM ring, 16-bit address (DBR=$00)
+ *
+ * SNES VRAM port contract (set up by map_lz_load_vram):
+ *   $2115 VMAIN  = 0x80  (address increments AFTER the high-byte write)
+ *   $2116/$2117 VMADD    = vram_word_addr (WORD address, not byte)
+ *   $2118 VMDATAL / $2119 VMDATAH  — alternating low/high writes stream words
+ * The running byte count's LSB selects the port (even byte -> VMDATAL, odd byte
+ * -> VMDATAH), so a full L/H pair advances the VRAM word address by one.
+ *
+ * MUST run under FORCED BLANK (INIDISP $2100 bit 7 = 1) or during vblank —
+ * VRAM is only writable then.
+ *
+ * rawlen is BYTES and should be EVEN (tiles/tilemaps always are). If odd, the
+ * final byte is written to VMDATAL with no matching VMDATAH, so the VRAM word
+ * address does not advance for that last partial word and that word's high byte
+ * keeps its previous VRAM contents. Pad to an even length to avoid this.
+ * ========================================================================= */
+#ifdef MAP_LZ_ENABLE_VRAM
+
+#define LZ_RING 4096                 /* == format max back-reference (off) */
+extern uint8_t g_lz_window[LZ_RING]; /* WRAM sliding-window ring (required) */
+
+#ifdef __mos__
+/* Emit one decoded byte: into the ring AND alternating VRAM data ports. */
+LZ_CODE static void lzv_put(uint8_t b) {
+    g_lz_window[lz_o & (LZ_RING - 1)] = b;
+    if (lz_o & 1) *(volatile uint8_t *)0x2119 = b;   /* VMDATAH (odd byte) */
+    else          *(volatile uint8_t *)0x2118 = b;   /* VMDATAL (even byte) */
+    lz_o++;
+}
+#else
+/* Host mirror: the ring is real (so the windowing logic is round-trip tested);
+ * lz_out stands in for VRAM, capturing the exact emitted byte stream. */
+LZ_CODE static void lzv_put(uint8_t b) {
+    g_lz_window[lz_o & (LZ_RING - 1)] = b;
+    lz_out[lz_o] = b;
+    lz_o++;
+}
+#endif
+
+/* Shared ring-buffer token loop (identical on SNES and host). */
+LZ_CODE static void map_lz_decode_vram(uint16_t rawlen) {
+    uint8_t flags = 0, nbits = 0;
+    lz_o = 0;
+    while (lz_o < rawlen) {
+        if (!nbits) { flags = lz_src_next(); nbits = 8; }
+        if (flags & 1) {
+            lzv_put(lz_src_next());
+        } else {
+            uint8_t b0 = lz_src_next(), b1 = lz_src_next();
+            uint16_t off = (uint16_t)(((uint16_t)(b1 & 0x0F) << 8) | b0) + 1;
+            uint16_t len = (uint16_t)(b1 >> 4);
+            len = (len == 15)
+                ? (uint16_t)(18 + lz_src_next())
+                : (uint16_t)(len + 3);
+            while (len--) {
+                /* off in 1..4096, off <= lz_o, so (lz_o-off)&4095 is the live
+                 * ring slot for the referenced byte — overlap/wrap safe. */
+                lzv_put(g_lz_window[(uint16_t)(lz_o - off) & (LZ_RING - 1)]);
+            }
+        }
+        flags >>= 1; nbits--;
+    }
+}
+
+#ifdef __mos__
+/**
+ * Decode a LZSS-compressed blob from ROM straight to VRAM (write-only graphics).
+ * Keeps only a 4096-byte WRAM ring (g_lz_window) instead of a RAW_MAX shadow.
+ * MUST be called under forced blank or during vblank.
+ *
+ * @param blob            Pointer to compressed data (16-bit addr in rom_bank).
+ * @param rom_bank        ROM bank byte ($04..$0B, etc.) where blob lives.
+ * @param complen         Length of compressed data in bytes.
+ * @param rawlen          Expected decompressed length in bytes (even; max 65535).
+ * @param vram_word_addr  Destination VRAM WORD address ($0000..$7FFF).
+ */
+LZ_CODE static void map_lz_load_vram(const unsigned char *blob, uint8_t rom_bank,
+                                     uint16_t complen, uint16_t rawlen,
+                                     uint16_t vram_word_addr) {
+    lz_blob = blob; lz_bank = rom_bank; lz_clen = complen;
+    lz_soff = 0; lz_si = 0; lz_silen = 0;
+    *(volatile uint8_t *)0x2115 = 0x80;                       /* VMAIN: +1 word after high */
+    *(volatile uint8_t *)0x2116 = (uint8_t)(vram_word_addr & 0xFF);  /* VMADDL */
+    *(volatile uint8_t *)0x2117 = (uint8_t)(vram_word_addr >> 8);    /* VMADDH */
+    map_lz_decode_vram(rawlen);
+}
+#else
+/**
+ * Host mirror of map_lz_load_vram: runs the identical ring-buffer decode, with
+ * the emitted byte stream captured into `out` (VRAM stand-in) so the windowing
+ * logic is round-trip testable off-target.
+ *
+ * @param blob    Pointer to compressed data produced by lz_compress.py.
+ * @param out     Output buffer of at least rawlen bytes (the VRAM stand-in).
+ * @param rawlen  Expected length of decompressed data in bytes (max 65535).
+ */
+static void map_lz_load_vram_host(const uint8_t *blob, uint8_t *out, uint16_t rawlen) {
+    lz_blob = blob; lz_si = 0; lz_out = out;
+    map_lz_decode_vram(rawlen);
+}
+#endif
+
+#endif /* MAP_LZ_ENABLE_VRAM */
+
 #endif /* MAP_LZ_H */

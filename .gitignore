@@ -1,3 +1,5 @@
 test_roundtrip
 .DS_Store
 __pycache__/
+demo/build/
+demo/*.smc.elf

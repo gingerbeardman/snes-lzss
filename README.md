@@ -16,6 +16,7 @@ The shipped sample (`testdata/wild_ride.*`) is one of those seven maps—a 240×
 | `testdata/wild_ride.raw` | Sample: a real SNES BG tilemap (13,440 bytes) |
 | `testdata/wild_ride.lz` | The same tilemap compressed (1,167 bytes) |
 | `docs/wild_ride_tilemap.png` | The sample tilemap rendered to PNG |
+| `demo/` | Runnable SNES demo ROM showing both decode modes ([see below](#demo)) |
 
 ## Quick start
 
@@ -86,8 +87,8 @@ this codec, but the differences matter on tilemap data:
 | Header | none (caller supplies raw length) | 4 bytes (magic + 24-bit size) |
 | Flag bit order | LSB-first | MSB-first |
 | Overlapping matches | yes (period replication) | not representable |
-| Decoder output | WRAM via $2180 port (CPU-readable) | VRAM-only via $2118/$2119 |
-| Decoder RAM | none (window = output itself) | 4096-byte ring buffer in WRAM |
+| Decoder output | WRAM (CPU-readable) **or** VRAM-direct (opt-in) | VRAM-only via $2118/$2119 |
+| Decoder RAM | WRAM mode: **none** (window = output); VRAM mode: 4096-byte ring | 4096-byte ring buffer in WRAM |
 | Decoder ROM size | ~426 bytes (compiled C) | ~280 bytes (hand ASM) |
 
 Same seven tilemaps through both encoders (LZ10 sizes via a round-trip-verified
@@ -111,11 +112,14 @@ set hits the 273 ceiling (wild_ride 146 times).
 
 Honest pros/cons:
 
-- **LZ10 wins on decoder size** (~150 bytes smaller, hand-written assembly) and its
-  VRAM-direct decode is convenient when the data is write-only graphics.
-- **snes-lzss wins on ratio** (2.8× on this data), needs **zero ring-buffer RAM**, and its
-  WRAM output leaves the decoded map CPU-readable — essential when the same tilemap drives
-  collision queries, which is exactly why it was written.
+- **LZ10 wins on decoder size** (~150 bytes smaller, hand-written assembly). Its
+  VRAM-direct decode is convenient for write-only graphics — but snes-lzss now has an
+  [opt-in VRAM-direct mode](#vram-direct-mode-optional) with the same 4096-byte ring, so
+  that convenience is no longer exclusive to LZ10.
+- **snes-lzss wins on ratio** (2.8× on this data) and, in its default WRAM mode, needs
+  **zero ring-buffer RAM** while leaving the decoded map CPU-readable — essential when the
+  same tilemap drives collision queries, which is exactly why it was written. (PVSnesLib
+  still has no WRAM/CPU-readable decode mode.)
 - Worth knowing: PVSnesLib only applies LZ10 to tile *graphics*; its tilemap loader
   (`bgInitMapSet`) is always uncompressed. For compressed tilemaps it has no equivalent.
 
@@ -175,6 +179,53 @@ map_lz_load(blob, rom_bank, complen, rawlen);
 
 **ROM/CPU footprint (measured):**  
 The decoder is 426 bytes of 65816 code as compiled by llvm-mos with `minsize` (375-byte token loop + 51-byte load wrapper). It runs only at level-load time (no per-frame overhead) and fits comfortably in a dedicated 32 KB ROM bank with room to spare.
+
+### VRAM-direct mode (optional)
+
+The default mode above decodes into a **WRAM shadow** (`g_map_shadow[RAW_MAX]`) so the map stays **CPU-readable** — required when the same tilemap also drives collision queries, which is why this codec exists. That costs one full-size shadow (`RAW_MAX` bytes) in WRAM.
+
+For **write-only tile graphics** (character/tile data the CPU never reads back), that shadow is wasteful. Define `MAP_LZ_ENABLE_VRAM` before including `map_lz.h` to add a second entry point that streams the decoded bytes **straight to VRAM** through the $2118/$2119 data port, keeping only a **4096-byte sliding-window ring** in WRAM instead — the same footprint as PVSnesLib's `LzssDecodeVram`, but with this codec's 2.8× ratio.
+
+Which to use:
+
+| Your data | Mode | WRAM cost |
+|-----------|------|-----------|
+| Tilemaps read by the CPU (collision, edits) | WRAM (default) | `RAW_MAX`-byte shadow |
+| Write-only tiles / sprite graphics | VRAM-direct (opt-in) | 4096-byte ring |
+
+The opt-in is compile-time, so **existing users pay zero bytes** — none of the VRAM code is emitted unless the macro is defined.
+
+**Extra required definition** (in addition to the default-mode SNES hooks):
+
+```c
+#define MAP_LZ_ENABLE_VRAM
+#include "map_lz.h"
+
+// 4096-byte sliding-window ring. Must be CPU-addressable with DBR=$00
+// (low WRAM $0000-$1FFF), since back-references are plain C array reads.
+uint8_t g_lz_window[4096];
+```
+
+**Call site** (must run under **forced blank** — INIDISP $2100 bit 7 = 1 — or during vblank, since VRAM is only writable then):
+
+```c
+// vram_word_addr = destination VRAM WORD address ($0000..$7FFF)
+map_lz_load_vram(blob, rom_bank, complen, rawlen, vram_word_addr);
+```
+
+`map_lz_load_vram` sets `$2115` VMAIN = `0x80` (increment after the high-byte write) and `$2116/$2117` VMADD, then alternates VMDATAL/VMDATAH so each low/high pair advances the VRAM word address by one. Every decoded byte is written to **both** the ring (for later back-references) and the VRAM port; back-references read from the ring with plain array reads — faster than the default mode's port-seek reads. `rawlen` is in **bytes and should be even** (tiles/tilemaps always are); an odd length writes the final byte to VMDATAL with no matching VMDATAH, leaving that VRAM word's high byte unchanged — pad to even to avoid it.
+
+The ring path is also compiled on the host (`map_lz_load_vram_host`, writing to a plain buffer through the identical windowing code) and is exercised by `test_roundtrip.c`, including crafted cases for the off = 4096 ring-span boundary, 273-byte maximum matches, and overlapping matches that wrap the ring. It was additionally hardware-verified in the Mesen emulator: decode the sample to VRAM and to the WRAM shadow, then byte-compare the emulator's VRAM against the shadow and the ground-truth raw.
+
+The VRAM path adds ~554 bytes of 65816 code (`-Os`) on top of the default decoder; enabling it does not change the default-mode footprint.
+
+## Demo
+
+`demo/snes-lzss-demo.smc` is a prebuilt 64 KB SNES ROM (runs in any emulator or on a flashcart, no toolchain needed) that shows both modes doing the job each one exists for: the terrain tile **graphics** decode straight to VRAM via `map_lz_load_vram` (write-only, 4 KB ring), while the level **tilemap** decodes into the CPU-readable WRAM shadow via `map_lz_load` — and the D-PAD then pans across the full 240-column level by streaming tilemap columns from that shadow into the 64-column hardware map on the fly, which is exactly what the WRAM mode is for.
+
+![demo screenshot](docs/demo_screenshot.png)
+
+The commented source in [`demo/`](demo/) doubles as an integration reference for both modes; building it (unlike the rest of this repo) requires [llvm-mos](https://llvm-mos.org) — see `demo/README.md`.
 
 ## License
 
