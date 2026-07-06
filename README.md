@@ -1,14 +1,8 @@
 # snes-lzss
 
-A compact LZSS compressor (Python) and decoder (C header) for SNES tilemap
-data — and general byte streams up to 65535 bytes.  Originally written for a
-SNES homebrew game to compress seven BG tilemaps from 81,376 bytes down to
-4,163 bytes (5.1% of original size).  Beat deflate and huffmunch in a bake-off
-on this data and requires zero runtime RAM for a ring buffer — the sliding
-window is the decoded output itself.
+A compact LZSS compressor (Python) and decoder (C header) for SNES tilemap data — and general byte streams up to 65535 bytes. Originally written for a SNES homebrew game to compress seven test BG tilemaps from 81,376 bytes down to 4,163 bytes (5.1% of original size). Beat deflate and huffmunch in a bake-off on this data and requires zero runtime RAM for a ring buffer — the sliding window is the decoded output itself.
 
-The shipped sample (`testdata/wild_ride.*`) is one of those seven maps — a
-240×28-tile SNES BG1 tilemap (13,440 bytes raw → 1,167 bytes compressed, 8.7%):
+The shipped sample (`testdata/wild_ride.*`) is one of those seven maps — a 240×28-tile SNES BG1 tilemap (13,440 bytes raw → 1,167 bytes compressed, 8.7%):
 
 ![wild_ride level tilemap](docs/wild_ride_tilemap.png)
 
@@ -61,13 +55,11 @@ b1 = hi4(off - 1) | (lenN << 4)
 - `lenN` 0..14 → `len = lenN + 3` (3..17 bytes)
 - `lenN` == 15 → a third byte follows: `len = 18 + ext_byte` (18..273 bytes)
 
-Overlapping matches (`off < len`) are valid and replicate the period-`off`
-pattern — useful for runs of repeating tiles.
+Overlapping matches (`off < len`) are valid and replicate the period-`off` pattern — useful for runs of repeating tiles.
 
 ## Measured results
 
-Tested on seven SNES BG tilemaps from a real game (2-byte tile-index words,
-column-major):
+Tested on seven SNES BG tilemaps from a real game (2-byte tile-index words, column-major):
 
 | Level | Raw (bytes) | Compressed | Ratio |
 |-------|-------------|------------|-------|
@@ -80,19 +72,11 @@ column-major):
 | deep_descent | 16864 | 331 | 2.0% |
 | **TOTAL** | **81376** | **4163** | **5.1%** |
 
-All seven were confirmed byte-perfect through the C decoder by the round-trip
-test; only `wild_ride` ships in this repo as sample data.  The codec was
-chosen over zlib/deflate and huffmunch after a bake-off on this dataset; the
-other algorithms achieved similar or worse ratios while requiring more ROM or
-RAM for the decoder.
+All seven were confirmed byte-perfect through the C decoder by the round-trip test; only `wild_ride` ships in this repo as sample data. The codec was chosen over zlib/deflate and huffmunch after a bake-off on this dataset; the other algorithms achieved similar or worse ratios while requiring more ROM or RAM for the decoder.
 
 ## Encoder algorithm
 
-Greedy-with-lazy LZSS.  Hash chains on 3-byte prefixes with exhaustive search
-within the 4096-byte window.  Lazy evaluation: after finding a match at
-position `i`, the encoder checks whether a match starting at `i+1` is longer;
-if so, it emits a literal for `i` and re-tries from `i+1`.  This typically
-recovers 2–5% over pure greedy on structured data.
+Greedy-with-lazy LZSS. Hash chains on 3-byte prefixes with exhaustive search within the 4096-byte window. Lazy evaluation: after finding a match at position `i`, the encoder checks whether a match starting at `i+1` is longer; if so, it emits a literal for `i` and re-tries from `i+1`. This typically recovers 2–5% over pure greedy on structured data.
 
 ## Decoder integration
 
@@ -109,10 +93,7 @@ map_lz_load_host(compressed_bytes, out, RAW_LEN);
 
 ### SNES / llvm-mos (65816)
 
-The decoder reads the compressed source from a low-WRAM staging buffer
-(populated via DMA from ROM), and writes the output through the SNES $2180
-WRAM data port (auto-increment).  This avoids needing a 4096-byte ring buffer
-in RAM and sidesteps the llvm-mos "near-addressing" issue when `DBR != $00`.
+The decoder reads the compressed source from a low-WRAM staging buffer (populated via DMA from ROM), and writes the output through the SNES $2180 WRAM data port (auto-increment). This avoids needing a 4096-byte ring buffer in RAM and sidesteps the llvm-mos "near-addressing" issue when `DBR != $00`.
 
 **Required definitions** (before `#include "map_lz.h"`):
 
@@ -148,10 +129,7 @@ map_lz_load(blob, rom_bank, complen, rawlen);
 ```
 
 **ROM/CPU footprint (approximate):**  
-The decoder (token loop + primitives) is roughly 200–400 bytes of 65816 code
-at `-Os` with llvm-mos, depending on how aggressively the linker inlines the
-static helpers.  It runs only at level-load time (no per-frame overhead) and
-fits comfortably in a dedicated 32 KB ROM bank with room to spare.
+The decoder (token loop + primitives) is roughly 200–400 bytes of 65816 code at `-Os` with llvm-mos, depending on how aggressively the linker inlines the static helpers. It runs only at level-load time (no per-frame overhead) and fits comfortably in a dedicated 32 KB ROM bank with room to spare.
 
 ## License
 
