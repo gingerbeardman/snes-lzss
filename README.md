@@ -1,8 +1,8 @@
 # snes-lzss
 
-A compact LZSS compressor (Python) and decoder (C header) for SNES tilemap data — and general byte streams up to 65535 bytes. Originally written for a SNES homebrew game to compress seven test BG tilemaps from 81,376 bytes down to 4,163 bytes (5.1% of original size). Beat deflate and huffmunch in a bake-off on this data and requires zero runtime RAM for a ring buffer — the sliding window is the decoded output itself.
+A compact LZSS compressor (Python) and decoder (C header) for SNES tilemap data and general byte streams up to 65535 bytes. Originally written for a SNES homebrew game to compress seven test BG tilemaps from 81,376 bytes down to 4,163 bytes (5.1% of original size). Beat deflate and huffmunch in a bake-off on this data and requires zero runtime RAM for a ring buffer: the sliding window is the decoded output itself.
 
-The shipped sample (`testdata/wild_ride.*`) is one of those seven maps — a 240×28-tile SNES BG1 tilemap (13,440 bytes raw → 1,167 bytes compressed, 8.7%):
+The shipped sample (`testdata/wild_ride.*`) is one of those seven maps—a 240×28-tile SNES BG1 tilemap (13,440 bytes raw → 1,167 bytes compressed, 8.7%):
 
 ![wild_ride level tilemap](docs/wild_ride_tilemap.png)
 
@@ -11,7 +11,7 @@ The shipped sample (`testdata/wild_ride.*`) is one of those seven maps — a 240
 | File | Purpose |
 |------|---------|
 | `lz_compress.py` | Compressor CLI + importable library (Python 3, no dependencies) |
-| `map_lz.h` | Decoder header — compiles on host (plain C99) and on SNES (llvm-mos/65816) |
+| `map_lz.h` | Decoder header, compiles on host (plain C99) and on SNES (llvm-mos/65816) |
 | `test_roundtrip.c` | Host round-trip test (`cc -std=c99 -o test_roundtrip test_roundtrip.c`) |
 | `testdata/wild_ride.raw` | Sample: a real SNES BG tilemap (13,440 bytes) |
 | `testdata/wild_ride.lz` | The same tilemap compressed (1,167 bytes) |
@@ -50,12 +50,12 @@ b0 = lo8(off - 1)
 b1 = hi4(off - 1) | (lenN << 4)
 ```
 
-- `off` — distance back into the decoded output, 1..4096  
+- `off` distance back into the decoded output, 1..4096  
   (the sliding window **is** the output; no separate ring buffer needed)
 - `lenN` 0..14 → `len = lenN + 3` (3..17 bytes)
 - `lenN` == 15 → a third byte follows: `len = 18 + ext_byte` (18..273 bytes)
 
-Overlapping matches (`off < len`) are valid and replicate the period-`off` pattern — useful for runs of repeating tiles.
+Overlapping matches (`off < len`) are valid and replicate the period-`off` pattern, useful for runs of repeating tiles.
 
 ## Measured results
 
@@ -120,10 +120,10 @@ extern uint8_t g_map_shadow[RAW_MAX];  // low WRAM, 16-bit address
 **Call site:**
 
 ```c
-// blob     — pointer to compressed data in ROM (16-bit address in rom_bank)
-// rom_bank — which ROM bank byte ($04, $05, …)
-// complen  — byte length of compressed data
-// rawlen   — byte length of the original (uncompressed) data
+// blob       pointer to compressed data in ROM (16-bit address in rom_bank)
+// rom_bank   which ROM bank byte ($04, $05, …)
+// complen    byte length of compressed data
+// rawlen     byte length of the original (uncompressed) data
 map_lz_load(blob, rom_bank, complen, rawlen);
 // g_map_shadow now contains the decoded tilemap; stream it to VRAM via DMA.
 ```
@@ -133,4 +133,4 @@ The decoder (token loop + primitives) is roughly 200–400 bytes of 65816 code a
 
 ## License
 
-MIT — see `LICENSE`.
+MIT, see `LICENSE`.
