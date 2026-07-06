@@ -29,5 +29,22 @@ mos-common-clang -mcpu=mosw65816 -I. -T demo.ld \
   -o snes-lzss-demo.smc \
   main.c data.s boot.s
 
+# Patch a VALID header checksum into $FFDC-$FFDF (LoROM: file offset 0x7FDC).
+# The linker emits zeros there; emulator GUIs score the LoROM/HiROM mapping
+# guess with this pair, and an invalid pair can make the ROM mis-detect.
+# With the pair pre-set to FF FF 00 00 its own contribution to the sum is the
+# same as the final complement+checksum (always 0x1FE), so: sum, then write.
+python3 - snes-lzss-demo.smc <<'EOF'
+import sys
+p = sys.argv[1]
+d = bytearray(open(p, 'rb').read())
+assert len(d) == 0x8000, f"expected 32KB LoROM image, got {len(d)}"
+d[0x7FDC:0x7FE0] = b'\xFF\xFF\x00\x00'
+s = sum(d) & 0xFFFF
+d[0x7FDC:0x7FE0] = bytes([(s ^ 0xFFFF) & 0xFF, (s ^ 0xFFFF) >> 8, s & 0xFF, s >> 8])
+open(p, 'wb').write(d)
+print(f"[ok] header checksum patched: ${s:04X} (complement ${s ^ 0xFFFF:04X})")
+EOF
+
 ls -la snes-lzss-demo.smc
 echo "[ok] built snes-lzss-demo.smc"

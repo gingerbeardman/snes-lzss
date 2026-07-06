@@ -44,7 +44,8 @@ extern const unsigned char demo_chr_lz[], demo_chr_lz_end[];
 #define MAP_ROWS   28               /* level height in 8px tile rows    */
 #define MAP_RAWLEN (MAP_COLS * MAP_ROWS * 2)
 #define CHR_RAWLEN 10912u           /* 341 4bpp tiles * 32 bytes        */
-#define ROM_BANK   0xC0             /* where the blobs live (demo.ld)   */
+#define ROM_BANK   0x80             /* blobs' DMA bank: the LoROM FastROM
+                                       mirror of the single 32KB bank   */
 
 /* wild_ride BG palette: 10 BGR555 colours for CGRAM 0..9 (colour 0 = backdrop).
  * Sample art from the SNES game the codec was written for. */
@@ -106,7 +107,8 @@ uint8_t g_lz_window[LZ_RING];         /* VRAM mode's 4KB ring (low WRAM)      */
 /* The decoded-tilemap shadow. Lives in extended WRAM ($7E:2000, demo.ld) and
  * is NEVER indexed as a C array — the decoder writes it through the $2180
  * WRAM port and the column streamer reads it by DMA, both with an explicit
- * $7E bank. (llvm-mos would near-address a bank-$7E symbol under DBR=$00.) */
+ * $7E bank. (llvm-mos would near-address a bank-$7E symbol under the running
+ * DBR — $80 here — and hit the wrong bank.) */
 __attribute__((section(".bank_7e_bss"))) uint8_t g_map_shadow[MAP_RAWLEN];
 
 /* Set the $2180 WRAM data-port address (WMADDH=0 -> bank $7E). */
@@ -176,6 +178,47 @@ int main(void) {
     uint16_t i, camx = BOOT_CAMX, winLo;
 
     INIDISP = 0x80;                   /* forced blank: VRAM/CGRAM writable  */
+
+    /* Full PPU register init — canonical SNES startup table.
+     * Hardware /RESET does NOT zero PPU registers ($2100-$213F); they hold
+     * whatever was written by the last program (or are undefined on power-on).
+     * Writing them all here (under forced blank) gives a deterministic slate.
+     *
+     * INIDISP ($2100) is already set above; BGMODE/BG1SC/BG12NBA/TM and the
+     * VRAM/CGRAM/OAM addresses are set further below.  Everything else that
+     * could corrupt a plain BG1 picture is silenced here.                   */
+    R8(0x420C) = 0x00;  /* HDMAEN   – no stray HDMA channels                */
+    R8(0x2133) = 0x00;  /* SETINI   – no interlace / overscan / hi-res / EXTBG */
+    R8(0x2101) = 0x00;  /* OBSEL    – OBJ tile base $0000, 8x8 size         */
+    R8(0x2102) = 0x00;  /* OAMADDL  – OAM address low                       */
+    R8(0x2103) = 0x00;  /* OAMADDH  – OAM address high + priority           */
+    R8(0x2106) = 0x00;  /* MOSAIC   – no mosaic                             */
+    R8(0x2108) = 0x00;  /* BG2SC    – BG2 tilemap addr                      */
+    R8(0x2109) = 0x00;  /* BG3SC    – BG3 tilemap addr                      */
+    R8(0x210A) = 0x00;  /* BG4SC    – BG4 tilemap addr                      */
+    R8(0x210C) = 0x00;  /* BG34NBA  – BG3/4 character addr                  */
+    R8(0x210F) = 0; R8(0x210F) = 0;   /* BG2HOFS (double-write: lo, hi)     */
+    R8(0x2110) = 0; R8(0x2110) = 0;   /* BG2VOFS                            */
+    R8(0x2111) = 0; R8(0x2111) = 0;   /* BG3HOFS                            */
+    R8(0x2112) = 0; R8(0x2112) = 0;   /* BG3VOFS                            */
+    R8(0x2113) = 0; R8(0x2113) = 0;   /* BG4HOFS                            */
+    R8(0x2114) = 0; R8(0x2114) = 0;   /* BG4VOFS                            */
+    R8(0x2123) = 0x00;  /* W12SEL   – window masks for BG1/BG2 (all off)    */
+    R8(0x2124) = 0x00;  /* W34SEL   – window masks for BG3/BG4 (all off)    */
+    R8(0x2125) = 0x00;  /* WOBJSEL  – window masks for OBJ/colour (all off) */
+    R8(0x2126) = 0x00;  /* WH0      – window 1 left edge                    */
+    R8(0x2127) = 0xFF;  /* WH1      – window 1 right edge (full width)      */
+    R8(0x2128) = 0x00;  /* WH2      – window 2 left edge                    */
+    R8(0x2129) = 0xFF;  /* WH3      – window 2 right edge (full width)      */
+    R8(0x212A) = 0x00;  /* WBGLOG   – window BG logic                       */
+    R8(0x212B) = 0x00;  /* WOBJLOG  – window OBJ/colour logic               */
+    R8(0x212D) = 0x00;  /* TS       – sub-screen layer enable (none)        */
+    R8(0x212E) = 0x00;  /* TMW      – main-screen window mask (off)         */
+    R8(0x212F) = 0x00;  /* TSW      – sub-screen window mask (off)          */
+    R8(0x2130) = 0x30;  /* CGWSEL   – colour math always prevented (bits 5:4=11) */
+    R8(0x2131) = 0x00;  /* CGADSUB  – no layers in colour math              */
+    R8(0x2132) = 0xE0;  /* COLDATA  – fixed sub-screen colour = black (R+G+B @ 0) */
+
     BGMODE  = 0x01;                   /* Mode 1                             */
     BG1SC   = 0x61;                   /* map base word $6000, size 64x32    */
     BG12NBA = 0x02;                   /* BG1 char base word $2000           */

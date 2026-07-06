@@ -3,9 +3,7 @@
  * This header compiles in two environments:
  *
  *   Host (any C99 compiler):
- *     #include <stdint.h>
- *     #include <string.h>
- *     #include "map_lz.h"
+ *     #include "map_lz.h"     (self-contained; pulls in stdint.h/string.h)
  *
  *     uint8_t out[RAWLEN];
  *     map_lz_load_host(compressed_bytes, out, RAWLEN);
@@ -52,6 +50,9 @@
 
 #ifndef MAP_LZ_H
 #define MAP_LZ_H
+
+#include <stdint.h>
+#include <string.h>
 
 #ifndef LZ_CODE
 #define LZ_CODE          /* define to e.g. __attribute__((section(".text.bank0c"))) */
@@ -165,7 +166,7 @@ LZ_CODE static void map_lz_decode(uint16_t rawlen) {
  * @param complen   Length of compressed data in bytes.
  * @param rawlen    Expected length of decompressed data in bytes (max 65535).
  */
-LZ_CODE static void map_lz_load(const unsigned char *blob, uint8_t rom_bank,
+LZ_CODE static inline void map_lz_load(const unsigned char *blob, uint8_t rom_bank,
                                  uint16_t complen, uint16_t rawlen) {
     lz_blob = blob; lz_bank = rom_bank; lz_clen = complen;
     lz_soff = 0; lz_si = 0; lz_silen = 0;
@@ -179,7 +180,7 @@ LZ_CODE static void map_lz_load(const unsigned char *blob, uint8_t rom_bank,
  * @param out     Output buffer of at least rawlen bytes.
  * @param rawlen  Expected length of decompressed data in bytes (max 65535).
  */
-static void map_lz_load_host(const uint8_t *blob, uint8_t *out, uint16_t rawlen) {
+static inline void map_lz_load_host(const uint8_t *blob, uint8_t *out, uint16_t rawlen) {
     lz_blob = blob; lz_si = 0; lz_out = out;
     map_lz_decode(rawlen);
 }
@@ -279,7 +280,7 @@ LZ_CODE static void map_lz_decode_vram(uint16_t rawlen) {
  * @param rawlen          Expected decompressed length in bytes (even; max 65535).
  * @param vram_word_addr  Destination VRAM WORD address ($0000..$7FFF).
  */
-LZ_CODE static void map_lz_load_vram(const unsigned char *blob, uint8_t rom_bank,
+LZ_CODE static inline void map_lz_load_vram(const unsigned char *blob, uint8_t rom_bank,
                                      uint16_t complen, uint16_t rawlen,
                                      uint16_t vram_word_addr) {
     lz_blob = blob; lz_bank = rom_bank; lz_clen = complen;
@@ -299,7 +300,7 @@ LZ_CODE static void map_lz_load_vram(const unsigned char *blob, uint8_t rom_bank
  * @param out     Output buffer of at least rawlen bytes (the VRAM stand-in).
  * @param rawlen  Expected length of decompressed data in bytes (max 65535).
  */
-static void map_lz_load_vram_host(const uint8_t *blob, uint8_t *out, uint16_t rawlen) {
+static inline void map_lz_load_vram_host(const uint8_t *blob, uint8_t *out, uint16_t rawlen) {
     lz_blob = blob; lz_si = 0; lz_out = out;
     map_lz_decode_vram(rawlen);
 }

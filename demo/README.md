@@ -12,8 +12,9 @@ each one exists for**, on real level data:
 
 ## Running it
 
-`snes-lzss-demo.smc` is prebuilt (64 KB HiROM) — load it in any SNES emulator
-(Mesen 2, bsnes, snes9x, RetroArch) or on a flashcart. No toolchain needed.
+`snes-lzss-demo.smc` is prebuilt (32 KB, LoROM FastROM, valid header
+checksum) — load it in any SNES emulator (Mesen 2, bsnes, snes9x, RetroArch)
+or on a flashcart. No toolchain needed.
 
 **Controls:** D-PAD **left/right** pans across the full 1,920-pixel level,
 clamped to the map bounds. (The map is exactly one screen tall — 28 tiles =
@@ -54,17 +55,22 @@ Files:
 | File | Purpose |
 |------|---------|
 | `main.c` | Demo logic: init, both decodes, column streamer, D-PAD scroll |
-| `boot.s` | Reset stub (emulation mode, PBR=$C0 / DBR=$00 discipline) |
+| `boot.s` | Reset stub (emulation mode; enables FastROM, runs at PBR/DBR=$80) |
 | `data.s` | `.incbin`s the two compressed blobs into ROM |
-| `demo.ld` | One-64KB-HiROM-bank linker script (code low half, rodata high half) |
+| `demo.ld` | Single-32KB-LoROM-FastROM-bank linker script |
 | `assets/wild_ride_map.lz` | Compressed tilemap (same data as `../testdata/wild_ride.lz`) |
 | `assets/wild_ride_chr.lz` | Compressed terrain CHR (`lz_compress.py` output) |
 | `build.sh` | Build script (needs llvm-mos) |
 | `snes-lzss-demo.smc` | Prebuilt ROM |
 
-The build was verified headless in Mesen 2 (boot state, VRAM checksum of the
-VRAM-direct CHR decode, and byte-compares of freshly streamed tilemap columns
-against the WRAM shadow while injecting D-PAD input).
+`build.sh` also patches a valid SNES header checksum into the ROM after
+linking (emulators use the checksum pair to score their LoROM/HiROM mapping
+guess; a zeroed pair can make a ROM mis-detect and fail to boot).
+
+The shipped ROM bytes were verified headless in Mesen 2 (boot state, VRAM
+checksum of the VRAM-direct CHR decode, and byte-compares of freshly streamed
+tilemap columns against the WRAM shadow while injecting D-PAD input) and
+render-checked in RetroArch/snes9x.
 
 ## Art credit
 

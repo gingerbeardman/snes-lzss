@@ -221,7 +221,7 @@ The VRAM path adds ~554 bytes of 65816 code (`-Os`) on top of the default decode
 
 ## Demo
 
-`demo/snes-lzss-demo.smc` is a prebuilt 64 KB SNES ROM (runs in any emulator or on a flashcart, no toolchain needed) that shows both modes doing the job each one exists for: the terrain tile **graphics** decode straight to VRAM via `map_lz_load_vram` (write-only, 4 KB ring), while the level **tilemap** decodes into the CPU-readable WRAM shadow via `map_lz_load` — and the D-PAD then pans across the full 240-column level by streaming tilemap columns from that shadow into the 64-column hardware map on the fly, which is exactly what the WRAM mode is for.
+`demo/snes-lzss-demo.smc` is a prebuilt 32 KB SNES ROM (LoROM FastROM; runs in any emulator or on a flashcart, no toolchain needed) that shows both modes doing the job each one exists for: the terrain tile **graphics** decode straight to VRAM via `map_lz_load_vram` (write-only, 4 KB ring), while the level **tilemap** decodes into the CPU-readable WRAM shadow via `map_lz_load` — and the D-PAD then pans across the full 240-column level by streaming tilemap columns from that shadow into the 64-column hardware map on the fly, which is exactly what the WRAM mode is for.
 
 ![demo screenshot](docs/demo_screenshot.png)
 
